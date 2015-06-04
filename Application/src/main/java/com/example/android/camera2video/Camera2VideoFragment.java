@@ -35,7 +35,7 @@ import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CameraMetadata;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.params.StreamConfigurationMap;
-import android.media.MediaRecorder;
+import android.media.MediaCodec;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -301,7 +301,7 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
             CameraCharacteristics characteristics = manager.getCameraCharacteristics(cameraId);
             StreamConfigurationMap map = characteristics
                     .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
-            mVideoSize = chooseVideoSize(map.getOutputSizes(MediaRecorder.class));
+            mVideoSize = chooseVideoSize(map.getOutputSizes(MediaCodec.class));
             mPreviewSize = chooseOptimalSize(map.getOutputSizes(SurfaceTexture.class),
                     width, height, mVideoSize);
 
@@ -395,8 +395,6 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
         }
         try {
             setUpCaptureRequestBuilder(mPreviewBuilder);
-            HandlerThread thread = new HandlerThread("CameraPreview");
-            thread.start();
             mPreviewSession.setRepeatingRequest(mPreviewBuilder.build(), null, mBackgroundHandler);
         } catch (CameraAccessException e) {
             e.printStackTrace();
@@ -440,11 +438,9 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
 
     private void startRecordingVideo() {
         try {
-            // UI
             mButtonVideo.setText(R.string.stop);
             mIsRecordingVideo = true;
 
-            // Start recording
             _Encoder.start();
         } catch (IllegalStateException e) {
             e.printStackTrace();
@@ -452,10 +448,8 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
     }
 
     private void stopRecordingVideo() {
-        // UI
         mIsRecordingVideo = false;
         mButtonVideo.setText(R.string.record);
-        // Stop recording
         Activity activity = getActivity();
         if (null != activity) {
             Toast.makeText(activity, "Video has bean saved",
