@@ -50,8 +50,6 @@ import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.Toast;
 
-import java.io.File;
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -72,30 +70,10 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
         ORIENTATIONS.append(Surface.ROTATION_270, 180);
     }
 
-    /**
-     * An {@link AutoFitTextureView} for camera preview.
-     */
     private AutoFitTextureView mTextureView;
-
-    /**
-     * Button to record video
-     */
     private Button mButtonVideo;
-
-    /**
-     * A refernce to the opened {@link android.hardware.camera2.CameraDevice}.
-     */
     private CameraDevice mCameraDevice;
-
-    /**
-     * A reference to the current {@link android.hardware.camera2.CameraCaptureSession} for preview.
-     */
     private CameraCaptureSession mPreviewSession;
-
-    /**
-     * {@link TextureView.SurfaceTextureListener} handles several lifecycle events on a
-     * {@link TextureView}.
-     */
     private TextureView.SurfaceTextureListener mSurfaceTextureListener
             = new TextureView.SurfaceTextureListener() {
 
@@ -122,51 +100,15 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
 
     };
 
-    /**
-     * The {@link android.util.Size} of camera preview.
-     */
     private Size mPreviewSize;
-
-    /**
-     * The {@link android.util.Size} of video recording.
-     */
     private Size mVideoSize;
-
-    /**
-     * Camera preview.
-     */
     private CaptureRequest.Builder mPreviewBuilder;
-
-    /**
-     * MediaRecorder
-     */
-    private MediaRecorder mMediaRecorder;
-
-    /**
-     * Whether the app is recording video now
-     */
     private boolean mIsRecordingVideo;
-
-    /**
-     * An additional thread for running tasks that shouldn't block the UI.
-     */
     private HandlerThread mBackgroundThread;
-
-    /**
-     * A {@link Handler} for running tasks in the background.
-     */
     private Handler mBackgroundHandler;
-
-    /**
-     * A {@link Semaphore} to prevent the app from exiting before closing the camera.
-     */
+    private Encoder _Encoder;
     private Semaphore mCameraOpenCloseLock = new Semaphore(1);
-
-    /**
-     * {@link CameraDevice.StateCallback} is called when {@link CameraDevice} changes its status.
-     */
     private CameraDevice.StateCallback mStateCallback = new CameraDevice.StateCallback() {
-
         @Override
         public void onOpened(CameraDevice cameraDevice) {
             mCameraDevice = cameraDevice;
@@ -189,10 +131,6 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
             mCameraOpenCloseLock.release();
             cameraDevice.close();
             mCameraDevice = null;
-            Activity activity = getActivity();
-            if (null != activity) {
-                activity.finish();
-            }
         }
 
     };
@@ -267,6 +205,13 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
     }
 
     @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        _Encoder = new Encoder();
+        _Encoder.onCreate(getActivity(), "video/avc", 1440, 1080);
+    }
+
+    @Override
     public void onResume() {
         super.onResume();
         startBackgroundThread();
@@ -279,9 +224,15 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
 
     @Override
     public void onPause() {
-        closeCamera();
         stopBackgroundThread();
         super.onPause();
+    }
+
+    @Override
+    public void onDestroy() {
+        closeCamera();
+        super.onDestroy();
+        _Encoder.onDestroy();
     }
 
     @Override
@@ -361,7 +312,6 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
                 mTextureView.setAspectRatio(mPreviewSize.getHeight(), mPreviewSize.getWidth());
             }
             configureTransform(width, height);
-            mMediaRecorder = new MediaRecorder();
             manager.openCamera(cameraId, mStateCallback, null);
         } catch (CameraAccessException e) {
             Toast.makeText(activity, "Cannot access the camera.", Toast.LENGTH_SHORT).show();
@@ -382,9 +332,8 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
                 mCameraDevice.close();
                 mCameraDevice = null;
             }
-            if (null != mMediaRecorder) {
-                mMediaRecorder.release();
-                mMediaRecorder = null;
+            if (null != _Encoder) {
+                //_Encoder.stop();
             }
         } catch (InterruptedException e) {
             throw new RuntimeException("Interrupted while trying to lock camera closing.");
@@ -401,7 +350,6 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
             return;
         }
         try {
-            setUpMediaRecorder();
             SurfaceTexture texture = mTextureView.getSurfaceTexture();
             assert texture != null;
             texture.setDefaultBufferSize(mPreviewSize.getWidth(), mPreviewSize.getHeight());
@@ -412,9 +360,10 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
             surfaces.add(previewSurface);
             mPreviewBuilder.addTarget(previewSurface);
 
-            Surface recorderSurface = mMediaRecorder.getSurface();
-            surfaces.add(recorderSurface);
-            mPreviewBuilder.addTarget(recorderSurface);
+            Surface codecSurface = _Encoder.getSurface();
+            surfaces.add(codecSurface);
+            mPreviewBuilder.addTarget(codecSurface);
+
 
             mCameraDevice.createCaptureSession(surfaces, new CameraCaptureSession.StateCallback() {
 
@@ -433,8 +382,6 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
                 }
             }, mBackgroundHandler);
         } catch (CameraAccessException e) {
-            e.printStackTrace();
-        } catch (IOException e) {
             e.printStackTrace();
         }
     }
@@ -491,30 +438,6 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
         mTextureView.setTransform(matrix);
     }
 
-    private void setUpMediaRecorder() throws IOException {
-        final Activity activity = getActivity();
-        if (null == activity) {
-            return;
-        }
-        mMediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC);
-        mMediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
-        mMediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
-        mMediaRecorder.setOutputFile(getVideoFile(activity).getAbsolutePath());
-        mMediaRecorder.setVideoEncodingBitRate(10000000);
-        mMediaRecorder.setVideoFrameRate(30);
-        mMediaRecorder.setVideoSize(mVideoSize.getWidth(), mVideoSize.getHeight());
-        mMediaRecorder.setVideoEncoder(MediaRecorder.VideoEncoder.H264);
-        mMediaRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
-        int rotation = activity.getWindowManager().getDefaultDisplay().getRotation();
-        int orientation = ORIENTATIONS.get(rotation);
-        mMediaRecorder.setOrientationHint(orientation);
-        mMediaRecorder.prepare();
-    }
-
-    private File getVideoFile(Context context) {
-        return new File(context.getExternalFilesDir(null), "video.mp4");
-    }
-
     private void startRecordingVideo() {
         try {
             // UI
@@ -522,7 +445,7 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
             mIsRecordingVideo = true;
 
             // Start recording
-            mMediaRecorder.start();
+            _Encoder.start();
         } catch (IllegalStateException e) {
             e.printStackTrace();
         }
@@ -533,14 +456,12 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
         mIsRecordingVideo = false;
         mButtonVideo.setText(R.string.record);
         // Stop recording
-        mMediaRecorder.stop();
-        mMediaRecorder.reset();
         Activity activity = getActivity();
         if (null != activity) {
-            Toast.makeText(activity, "Video saved: " + getVideoFile(activity),
+            Toast.makeText(activity, "Video has bean saved",
                     Toast.LENGTH_SHORT).show();
         }
-        startPreview();
+        _Encoder.stop();
     }
 
     /**
