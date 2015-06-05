@@ -22,8 +22,6 @@ public class Encoder extends MediaCodec.Callback {
     private int _TrackedIndex;
     private boolean _MuxerStarted;
     private Surface _InputSurface;
-    private boolean _Accepted = false;
-
 
     public void onCreate(Context context, String type, int width, int height) { //1440x1080
 
@@ -40,18 +38,6 @@ public class Encoder extends MediaCodec.Callback {
         return _InputSurface;
     }
 
-    public void start() {
-        setAccepted(true);
-    }
-
-    public void stop() {
-        setAccepted(false);
-    }
-
-    private void setAccepted(boolean accepted) {
-        _Accepted = accepted;
-    }
-
     @Override
     public void onInputBufferAvailable(MediaCodec mediaCodec, int i) {
         Log.e(TAG, "onInputBufferAvailable");
@@ -59,7 +45,8 @@ public class Encoder extends MediaCodec.Callback {
 
     @Override
     public void onOutputBufferAvailable(MediaCodec mediaCodec, int i, MediaCodec.BufferInfo bufferInfo) {
-        if (_Accepted && _MuxerStarted) {
+        if (_MuxerStarted) {
+            Log.d(TAG,"onOutputBufferAvailable go ...");
             ByteBuffer outBuffer = mediaCodec.getOutputBuffer(i);
             outBuffer.position(bufferInfo.offset);
             outBuffer.limit(bufferInfo.offset + bufferInfo.size);

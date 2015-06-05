@@ -21,26 +21,12 @@ import android.app.AlertDialog;
 import android.app.Dialog;
 import android.app.DialogFragment;
 import android.app.Fragment;
-import android.content.Context;
 import android.content.DialogInterface;
-import android.content.res.Configuration;
-import android.graphics.Matrix;
-import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
-import android.hardware.camera2.CameraAccessException;
-import android.hardware.camera2.CameraCaptureSession;
-import android.hardware.camera2.CameraCharacteristics;
-import android.hardware.camera2.CameraDevice;
-import android.hardware.camera2.CameraManager;
-import android.hardware.camera2.CameraMetadata;
-import android.hardware.camera2.CaptureRequest;
-import android.hardware.camera2.params.StreamConfigurationMap;
-import android.media.MediaCodec;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.util.Log;
-import android.util.Size;
 import android.util.SparseIntArray;
 import android.view.LayoutInflater;
 import android.view.Surface;
@@ -49,13 +35,6 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.Toast;
-
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.List;
-import java.util.concurrent.Semaphore;
-import java.util.concurrent.TimeUnit;
 
 public class Camera2VideoFragment extends Fragment implements View.OnClickListener {
 
@@ -72,21 +51,26 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
 
     private AutoFitTextureView mTextureView;
     private Button mButtonVideo;
-    private CameraDevice mCameraDevice;
-    private CameraCaptureSession mPreviewSession;
+    private Camera2Wrapper _Camera2;
+    private int _Width;
+    private int _Height;
     private TextureView.SurfaceTextureListener mSurfaceTextureListener
             = new TextureView.SurfaceTextureListener() {
 
         @Override
         public void onSurfaceTextureAvailable(SurfaceTexture surfaceTexture,
                                               int width, int height) {
-            openCamera(width, height);
+            _Width = width;
+            _Height = height;
+            _Camera2.setFitTextureView(mTextureView);
+            _Camera2.openCamera(getActivity(), width, height);
         }
 
         @Override
         public void onSurfaceTextureSizeChanged(SurfaceTexture surfaceTexture,
                                                 int width, int height) {
-            configureTransform(width, height);
+            //configureTransform(width, height);
+            Log.e(TAG, "onSurfaceTextureSizeChanged");
         }
 
         @Override
@@ -100,94 +84,15 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
 
     };
 
-    private Size mPreviewSize;
-    private Size mVideoSize;
-    private CaptureRequest.Builder mPreviewBuilder;
     private boolean mIsRecordingVideo;
     private HandlerThread mBackgroundThread;
     private Handler mBackgroundHandler;
     private Encoder _Encoder;
-    private Semaphore mCameraOpenCloseLock = new Semaphore(1);
-    private CameraDevice.StateCallback mStateCallback = new CameraDevice.StateCallback() {
-        @Override
-        public void onOpened(CameraDevice cameraDevice) {
-            mCameraDevice = cameraDevice;
-            startPreview();
-            mCameraOpenCloseLock.release();
-            if (null != mTextureView) {
-                configureTransform(mTextureView.getWidth(), mTextureView.getHeight());
-            }
-        }
-
-        @Override
-        public void onDisconnected(CameraDevice cameraDevice) {
-            mCameraOpenCloseLock.release();
-            cameraDevice.close();
-            mCameraDevice = null;
-        }
-
-        @Override
-        public void onError(CameraDevice cameraDevice, int error) {
-            mCameraOpenCloseLock.release();
-            cameraDevice.close();
-            mCameraDevice = null;
-        }
-
-    };
 
     public static Camera2VideoFragment newInstance() {
         Camera2VideoFragment fragment = new Camera2VideoFragment();
         fragment.setRetainInstance(true);
         return fragment;
-    }
-
-    /**
-     * In this sample, we choose a video size with 3x4 aspect ratio. Also, we don't use sizes larger
-     * than 1080p, since MediaRecorder cannot handle such a high-resolution video.
-     *
-     * @param choices The list of available sizes
-     * @return The video size
-     */
-    private static Size chooseVideoSize(Size[] choices) {
-        for (Size size : choices) {
-            if (size.getWidth() == size.getHeight() * 4 / 3 && size.getWidth() <= 1080) {
-                return size;
-            }
-        }
-        Log.e(TAG, "Couldn't find any suitable video size");
-        return choices[choices.length - 1];
-    }
-
-    /**
-     * Given {@code choices} of {@code Size}s supported by a camera, chooses the smallest one whose
-     * width and height are at least as large as the respective requested values, and whose aspect
-     * ratio matches with the specified value.
-     *
-     * @param choices     The list of sizes that the camera supports for the intended output class
-     * @param width       The minimum desired width
-     * @param height      The minimum desired height
-     * @param aspectRatio The aspect ratio
-     * @return The optimal {@code Size}, or an arbitrary one if none were big enough
-     */
-    private static Size chooseOptimalSize(Size[] choices, int width, int height, Size aspectRatio) {
-        // Collect the supported resolutions that are at least as big as the preview Surface
-        List<Size> bigEnough = new ArrayList<Size>();
-        int w = aspectRatio.getWidth();
-        int h = aspectRatio.getHeight();
-        for (Size option : choices) {
-            if (option.getHeight() == option.getWidth() * h / w &&
-                    option.getWidth() >= width && option.getHeight() >= height) {
-                bigEnough.add(option);
-            }
-        }
-
-        // Pick the smallest of those, assuming we found any
-        if (bigEnough.size() > 0) {
-            return Collections.min(bigEnough, new CompareSizesByArea());
-        } else {
-            Log.e(TAG, "Couldn't find any suitable preview size");
-            return choices[0];
-        }
     }
 
     @Override
@@ -202,6 +107,7 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
         mButtonVideo = (Button) view.findViewById(R.id.video);
         mButtonVideo.setOnClickListener(this);
         view.findViewById(R.id.info).setOnClickListener(this);
+        mTextureView.setSurfaceTextureListener(mSurfaceTextureListener);
     }
 
     @Override
@@ -209,28 +115,30 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
         super.onCreate(savedInstanceState);
         _Encoder = new Encoder();
         _Encoder.onCreate(getActivity(), "video/avc", 1440, 1080);
+
+        _Camera2 = new Camera2Wrapper();
+        _Camera2.setRecordSurface(_Encoder.getSurface());
     }
 
     @Override
     public void onResume() {
         super.onResume();
-        startBackgroundThread();
-        if (mTextureView.isAvailable()) {
-            openCamera(mTextureView.getWidth(), mTextureView.getHeight());
-        } else {
-            mTextureView.setSurfaceTextureListener(mSurfaceTextureListener);
-        }
+//        if (mTextureView.isAvailable()) {
+//            _Camera2.setSurfaceTexture(mTextureView.getSurfaceTexture());
+//            _Camera2.onResume(getActivity(), mTextureView.getWidth(), mTextureView.getHeight());
+//        } else {
+//            mTextureView.setSurfaceTextureListener(mSurfaceTextureListener);
+//        }
     }
 
     @Override
     public void onPause() {
-        stopBackgroundThread();
+        _Camera2.onPause();
         super.onPause();
     }
 
     @Override
     public void onDestroy() {
-        closeCamera();
         super.onDestroy();
         _Encoder.onDestroy();
     }
@@ -282,166 +190,14 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
         }
     }
 
-    /**
-     * Tries to open a {@link CameraDevice}. The result is listened by `mStateCallback`.
-     */
-    private void openCamera(int width, int height) {
-        final Activity activity = getActivity();
-        if (null == activity || activity.isFinishing()) {
-            return;
-        }
-        CameraManager manager = (CameraManager) activity.getSystemService(Context.CAMERA_SERVICE);
-        try {
-            if (!mCameraOpenCloseLock.tryAcquire(2500, TimeUnit.MILLISECONDS)) {
-                throw new RuntimeException("Time out waiting to lock camera opening.");
-            }
-            String cameraId = manager.getCameraIdList()[0];
 
-            // Choose the sizes for camera preview and video recording
-            CameraCharacteristics characteristics = manager.getCameraCharacteristics(cameraId);
-            StreamConfigurationMap map = characteristics
-                    .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
-            mVideoSize = chooseVideoSize(map.getOutputSizes(MediaCodec.class));
-            mPreviewSize = chooseOptimalSize(map.getOutputSizes(SurfaceTexture.class),
-                    width, height, mVideoSize);
-
-            int orientation = getResources().getConfiguration().orientation;
-            if (orientation == Configuration.ORIENTATION_LANDSCAPE) {
-                mTextureView.setAspectRatio(mPreviewSize.getWidth(), mPreviewSize.getHeight());
-            } else {
-                mTextureView.setAspectRatio(mPreviewSize.getHeight(), mPreviewSize.getWidth());
-            }
-            configureTransform(width, height);
-            manager.openCamera(cameraId, mStateCallback, null);
-        } catch (CameraAccessException e) {
-            Toast.makeText(activity, "Cannot access the camera.", Toast.LENGTH_SHORT).show();
-            activity.finish();
-        } catch (NullPointerException e) {
-            // Currently an NPE is thrown when the Camera2API is used but not supported on the
-            // device this code runs.
-            new ErrorDialog().show(getFragmentManager(), "dialog");
-        } catch (InterruptedException e) {
-            throw new RuntimeException("Interrupted while trying to lock camera opening.");
-        }
-    }
-
-    private void closeCamera() {
-        try {
-            mCameraOpenCloseLock.acquire();
-            if (null != mCameraDevice) {
-                mCameraDevice.close();
-                mCameraDevice = null;
-            }
-            if (null != _Encoder) {
-                //_Encoder.stop();
-            }
-        } catch (InterruptedException e) {
-            throw new RuntimeException("Interrupted while trying to lock camera closing.");
-        } finally {
-             mCameraOpenCloseLock.release();
-        }
-    }
-
-    /**
-     * Start the camera preview.
-     */
-    private void startPreview() {
-        if (null == mCameraDevice || !mTextureView.isAvailable() || null == mPreviewSize) {
-            return;
-        }
-        try {
-            SurfaceTexture texture = mTextureView.getSurfaceTexture();
-            assert texture != null;
-            texture.setDefaultBufferSize(mPreviewSize.getWidth(), mPreviewSize.getHeight());
-            mPreviewBuilder = mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_RECORD);
-            List<Surface> surfaces = new ArrayList<Surface>();
-
-            Surface previewSurface = new Surface(texture);
-            surfaces.add(previewSurface);
-            mPreviewBuilder.addTarget(previewSurface);
-
-            Surface codecSurface = _Encoder.getSurface();
-            surfaces.add(codecSurface);
-            mPreviewBuilder.addTarget(codecSurface);
-
-
-            mCameraDevice.createCaptureSession(surfaces, new CameraCaptureSession.StateCallback() {
-
-                @Override
-                public void onConfigured(CameraCaptureSession cameraCaptureSession) {
-                    mPreviewSession = cameraCaptureSession;
-                    updatePreview();
-                }
-
-                @Override
-                public void onConfigureFailed(CameraCaptureSession cameraCaptureSession) {
-                    Activity activity = getActivity();
-                    if (null != activity) {
-                        Toast.makeText(activity, "Failed", Toast.LENGTH_SHORT).show();
-                    }
-                }
-            }, mBackgroundHandler);
-        } catch (CameraAccessException e) {
-            e.printStackTrace();
-        }
-    }
-
-    /**
-     * Update the camera preview. {@link #startPreview()} needs to be called in advance.
-     */
-    private void updatePreview() {
-        if (null == mCameraDevice) {
-            return;
-        }
-        try {
-            setUpCaptureRequestBuilder(mPreviewBuilder);
-            mPreviewSession.setRepeatingRequest(mPreviewBuilder.build(), null, mBackgroundHandler);
-        } catch (CameraAccessException e) {
-            e.printStackTrace();
-        }
-    }
-
-    private void setUpCaptureRequestBuilder(CaptureRequest.Builder builder) {
-        builder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO);
-    }
-
-    /**
-     * Configures the necessary {@link android.graphics.Matrix} transformation to `mTextureView`.
-     * This method should not to be called until the camera preview size is determined in
-     * openCamera, or until the size of `mTextureView` is fixed.
-     *
-     * @param viewWidth  The width of `mTextureView`
-     * @param viewHeight The height of `mTextureView`
-     */
-    private void configureTransform(int viewWidth, int viewHeight) {
-        Activity activity = getActivity();
-        if (null == mTextureView || null == mPreviewSize || null == activity) {
-            return;
-        }
-        int rotation = activity.getWindowManager().getDefaultDisplay().getRotation();
-        Matrix matrix = new Matrix();
-        RectF viewRect = new RectF(0, 0, viewWidth, viewHeight);
-        RectF bufferRect = new RectF(0, 0, mPreviewSize.getHeight(), mPreviewSize.getWidth());
-        float centerX = viewRect.centerX();
-        float centerY = viewRect.centerY();
-        if (Surface.ROTATION_90 == rotation || Surface.ROTATION_270 == rotation) {
-            bufferRect.offset(centerX - bufferRect.centerX(), centerY - bufferRect.centerY());
-            matrix.setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL);
-            float scale = Math.max(
-                    (float) viewHeight / mPreviewSize.getHeight(),
-                    (float) viewWidth / mPreviewSize.getWidth());
-            matrix.postScale(scale, scale, centerX, centerY);
-            matrix.postRotate(90 * (rotation - 2), centerX, centerY);
-        }
-        mTextureView.setTransform(matrix);
-    }
 
     private void startRecordingVideo() {
         try {
             mButtonVideo.setText(R.string.stop);
             mIsRecordingVideo = true;
 
-            _Encoder.start();
+            _Camera2.startRecord();
         } catch (IllegalStateException e) {
             e.printStackTrace();
         }
@@ -455,21 +211,8 @@ public class Camera2VideoFragment extends Fragment implements View.OnClickListen
             Toast.makeText(activity, "Video has bean saved",
                     Toast.LENGTH_SHORT).show();
         }
-        _Encoder.stop();
-    }
 
-    /**
-     * Compares two {@code Size}s based on their areas.
-     */
-    static class CompareSizesByArea implements Comparator<Size> {
-
-        @Override
-        public int compare(Size lhs, Size rhs) {
-            // We cast here to ensure the multiplications won't overflow
-            return Long.signum((long) lhs.getWidth() * lhs.getHeight() -
-                    (long) rhs.getWidth() * rhs.getHeight());
-        }
-
+        _Camera2.stopRecord();
     }
 
     public static class ErrorDialog extends DialogFragment {
